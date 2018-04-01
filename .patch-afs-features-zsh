@@ -1,0 +1,183 @@
+#!/bin/zsh
+##############################
+#
+# Un-Standard AFS /etc/std-bash-rc
+#
+# Modify at Joshua Katz's risk ......
+#
+# Changelog:
+# 2017-05-2
+#	- Ported to ZSH
+##############################
+
+
+MACHINE=$(uname -s)
+HOST=$(uname -n)
+PLATFORM=$(uname -p)
+
+function pathmunge() {
+	case ":${PATH}:" in
+		*:"$1":*)
+		;;
+		*)
+			if [[ "$2" == "after" ]] ; then
+				PATH=$PATH:$1
+			else
+				PATH=$1:$PATH
+			fi
+		;;
+	esac
+}
+
+function on_hpc_host() {
+	# Login on Kong, Stheno (headnode or compute node), or compute node ? 4-Apr-2017 /KJW
+	case "$HOST" in
+		'kong.njit.edu' | 'stheno.njit.edu' )
+			# Definately HPC host
+			return 0
+		;;
+		'kong'[0-9] | 'kong'[0-9]'.tartan'* | 'stheno'[0-9] | 'stheno'[0-9]'.tartan'* )
+			# Quite likely HPC login host
+			return 0
+		;;
+		'node'[0-9][0-9] | 'node'[0-9][0-9][0-9] )
+			# Probably HPC compute node
+			return 0
+		;;
+		'node'[0-9]* | *'.tartan' | *'.tartan.njit.edu' | 'headnode' | 'headnode.'* )
+			# Unsure what this is, look for HPC daemons
+			if ps -ef | egrep --silent '(sge_execd|slurmd)$' ; then
+				# Apparently HPC related
+				return 0
+			fi
+		;;
+	esac
+	# Non-HPC host
+	return 1
+}
+
+# Set search path
+pathmunge /usr/ucs/bin
+pathmunge /usr/site/bin
+pathmunge /usr/local/bin
+pathmunge /afs/cad/sw.common/bin
+pathmunge /afs/cad/ucs/bin/functions
+pathmunge /afs/cad/linux/compilers/bin after
+pathmunge $JAVA_HOME/bin
+pathmunge $HOME/bin
+
+
+# Add extra locations for NetLab computers. 20140202 - rgaine
+pathmunge /sbin after
+pathmunge /usr/sbin after
+
+# Set environment variables
+export EDITOR=/bin/vi
+export MAILER=/bin/mail
+export PAGER=/usr/local/bin/less
+export LESS='-sCM'
+export MORE='-c'
+export TOMCAT_HOME=/afs/cad/linux/tomcat
+export CLASSPATH=.:$HOME/classes:$TOMCAT_HOME/common/lib/servlet-api.jar:$TOMCAT_HOME/common/lib/jsp-api.jar
+export CLASSPATH=${CLASSPATH}:/afs/cad/linux/oraclient10.2/jdbc/lib/classes12.zip
+export CLASSPATH=${CLASSPATH}:/afs/cad/solaris/mysql/jdbc/mysql-connector-java-5.0.4-bin.jar
+export MANPATH=$MANPATH:/afs/cad/linux/compilers/man
+
+if [[ "$PLATFORM" == "i686" ]]; then
+	export JAVA_HOME=/afs/cad/linux/java_1.6.0
+fi
+
+if on_hpc_host ; then
+	pathmunge /opt/userstat/bin
+	pathmunge /afs/cad/hpc/site/bin
+	aklog &> /dev/null # KLUDGE for Kong0
+fi
+
+function run_klist () {
+	# 13Mar2015 -dp
+	echo "=== === ===  Ticket and AFS status  === === ==="
+
+	klist -5 -f | grep -2 krbtgt | grep Flags | sed 's/renew/Renew/' | xargs echo 'Kerberos : '
+	tokens | grep AFS | xargs -0 echo                      'AFS      : '
+}
+
+function load_profiled() {
+	echo "=== === === Loading /etc/profile.d/ === === ==="
+	for profiled_path in /etc/profile.d/*.sh; do
+		if [ -r "$profiled_path" ]; then
+			echo "\tLoading ${profiled_path}"
+			# if [ "$PS1" ]; then
+			. "$profiled_path"
+			# else
+			# 	. "$profiled_path" >/dev/null 2>&1
+			# fi
+		fi
+	done
+}
+
+function load_modules () {
+	MODULES_TO_LOAD=("python3" "java8" "matlab/2016a")
+	echo "=== === ===   Python Version Info   === === ==="
+	echo "1. The default python is Anaconda Python 3"
+	echo "2. To instead use Anaconda Python 2 :"
+	echo "\techo 'module load python2' > ~/.modules" "Then log out / log in "
+
+	if on_hpc_host ; then
+		module load sge
+	fi
+
+	if [[ -s "$HOME/.modules" ]]; then
+		printf "\n\n%s" "Running your ~/.modules file:"
+		. $HOME/.modules
+		printf "\n"
+		module list
+		printf "\n"
+	else
+		for M in "$MODULES_TO_LOAD[@]"; do
+			echo "Loading [ $M ] ..."
+			module load $M
+		done
+		module list
+		printf "\n"
+	fi
+}
+
+function print_disk_quota() {
+	echo "=== === === DISK STATUS: Used Quota === === ==="
+	fs lq
+	#echo "=== === === DISK STATUS: 5 Largest  === === ==="
+	#du -ch --exclude ~/BACKUP-AFS.ACCOUNT --max-depth=1 ~/ | sort -rh | head -n 7 | tail -n 5
+}
+
+function ready_system() {
+	set +o noclobber
+
+	echo "=== === ===   INITIALIZING SYSTEM   === === ==="
+	echo "Hostname [$(uname -n)]"
+	echo "Uptime   [$(uptime)]"
+
+	load_profiled
+	print_disk_quota
+
+	run_klist
+	load_modules
+}
+
+if xhost >& /dev/null; then
+	set -o noclobber
+	printf "System Detected...\n%s\n" "$(ready_system)" | zenity --text-info --width=800 --height=600 --title="Login Information"
+	set +o noclobber
+else
+	echo "Terminal System Detected..."
+	ready_system
+fi
+
+# Remove the functions we set. 4-Apr-2017 /KJW
+unset pathmunge
+unset on_hpc_host
+unset run_klist
+unset load_modules
+unset load_profiled
+unset print_disk_quota
+unset ready_system
+
